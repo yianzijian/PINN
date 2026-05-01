@@ -1,0 +1,12 @@
+Pt 文件是神经网络训练的参数文件，adam 和 lbfgs 是优化器
+Txt 文件是comsol 的数据集，需要进行插值才能绘出比较漂亮的图片
+Dat 文件是 deepxde 训练自带的文件主要是训练的情况，作用不是很大
+Png 是图片文件格式
+py 文件是主要的代码
+
+deepxde 的一些问题
+代码后端
+Using backend: pytorch
+https://deepxde.readthedocs.io/en/latest/user/installation.html
+详情教程在上面的网站
+dde.config.set_default_float("float64")避免迭代不正常结束
