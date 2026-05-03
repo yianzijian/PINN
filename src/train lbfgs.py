@@ -15,6 +15,7 @@ import numpy as np             # 数值计算
 import torch                   # PyTorch 深度学习框架
 import torch.nn as nn          # 神经网络模块
 import matplotlib.pyplot as plt # 绘图可视化
+from datetime import datetime  # 日期时间处理（用于生成时间戳）
 
 # 从 training_metadata 模块导入训练元数据相关函数
 from training_metadata import (
@@ -222,17 +223,21 @@ dde.saveplot(losshistory_lbfgs, train_state_lbfgs)
 # =============================================
 # 保存精修后的模型权重
 # =============================================
+# 生成时间戳（格式：YYYYMMDD_HHMMSS）
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+OUT_CKPT = f"eshapeadamLBFGS_{timestamp}.pt"  # 输出权重文件名（带时间戳）
+
 print("正在保存模型...")
-OUT_CKPT = "eshapeadamLBFGS50005.pt"  # 输出权重文件名
 torch.save(model.net.state_dict(), os.path.join(_MODEL_DIR, OUT_CKPT))
-print("✓ 模型保存成功！")
+print(f"✓ 模型保存成功: {OUT_CKPT}")
 
 # =============================================
 # 保存训练清单与元数据
 # =============================================
+manifest_name = f"eshape_lbfgs_manifest_{timestamp}.json"
 _manifest_path = save_manifest(
     _MODEL_DIR,
-    "eshape_lbfgs_manifest.json",
+    manifest_name,
     {
         "run": {
             "script": "train lbfgs.py",
@@ -278,7 +283,7 @@ _manifest_path = save_manifest(
         },
         "artifacts": {
             "checkpoints": {"output": OUT_CKPT},
-            "manifest": "eshape_lbfgs_manifest.json",
+            "manifest": manifest_name,
         },
     },
 )

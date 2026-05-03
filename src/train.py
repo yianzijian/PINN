@@ -12,6 +12,7 @@ import torch                   # PyTorch 深度学习框架
 import torch.nn as nn          # 神经网络模块
 import matplotlib.pyplot as plt # 绘图可视化
 import deepxde as dde          # 物理信息神经网络库
+from datetime import datetime  # 日期时间处理（用于生成时间戳）
 
 # 从 training_metadata 模块导入训练元数据相关函数：
 # - collect_environment: 收集运行环境信息
@@ -29,7 +30,6 @@ from training_metadata import (
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 获取项目根目录路径
 _MODEL_DIR = os.path.join(_ROOT, "models")  # 模型保存目录
 os.makedirs(_MODEL_DIR, exist_ok=True)  # 确保模型目录存在，不存在则创建
-
 # 设置 DeepXDE 后端为 PyTorch
 os.environ["DDE_BACKEND"] = "pytorch"
 
@@ -57,8 +57,6 @@ def boundary_left(x, on_boundary):   return on_boundary and dde.utils.isclose(x[
 def boundary_right(x, on_boundary):  return on_boundary and dde.utils.isclose(x[0], 1.0)  # 右边界 x=1
 def boundary_top(x, on_boundary):    return on_boundary and dde.utils.isclose(x[1], 1.0)  # 上边界 y=1
 def boundary_bottom(x, on_boundary): return on_boundary and dde.utils.isclose(x[1], 0.0)  # 下边界 y=0
-
-
 # =============================================
 # 电流源模型：矩形区域内均匀电流密度（阶跃近似）
 # 模拟绕组/导体窗口一类源项
@@ -96,7 +94,6 @@ class HardRectangleStep(nn.Module):
 
 
 f_model = HardRectangleStep()  # 实例化电流源模型
-
 
 # =============================================
 # 泊松方程 PDE 定义：∇²A = -μ₀J
@@ -159,13 +156,13 @@ else:
 # 训练超参数设置
 # =============================================
 ADAM_LR = 0.001          # Adam 优化器学习率
-ADAM_ITERATIONS = 20000  # Adam 迭代次数
+ADAM_ITERATIONS = 5000  # Adam 迭代次数
 
 # L-BFGS 参数说明：
 # maxcor: L-BFGS 保留的曲率对数量
 # gtol/ftol: 梯度与函数值停止准则（0 表示不按该项停）
 # maxiter: L-BFGS 内层迭代上限
-LBFGS_OPTIONS = {"maxcor": 100, "ftol": 0, "gtol": 1e-13, "maxiter": 30000}
+LBFGS_OPTIONS = {"maxcor": 100, "ftol": 0, "gtol": 1e-13, "maxiter": 5000}
 train_device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # =============================================
@@ -175,7 +172,14 @@ train_device = "cuda" if torch.cuda.is_available() else "cpu"
 model.compile("adam", lr=ADAM_LR)  # 使用 Adam 优化器编译模型
 print(f"开始 Adam {ADAM_ITERATIONS} 次迭代...")
 losshistory_adam, train_state_adam = model.train(iterations=ADAM_ITERATIONS)  # 开始训练
-torch.save(model.net.state_dict(), os.path.join(_MODEL_DIR, "eshape_adam.pt"))  # 保存 Adam 训练结果
+
+# 生成时间戳（格式：YYYYMMDD_HHMMSS）
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+adam_model_name = f"eshape_adam_{timestamp}.pt"
+final_model_name = f"eshape_final_{timestamp}.pt"
+
+torch.save(model.net.state_dict(), os.path.join(_MODEL_DIR, adam_model_name))  # 保存 Adam 训练结果
+print(f"✓ Adam 阶段模型已保存: {adam_model_name}")
 
 # =============================================
 # 阶段2：L-BFGS 精细优化
@@ -188,7 +192,8 @@ model.net.to(torch.device("cpu"))  # L-BFGS 在 CPU 上运行
 dde.optimizers.config.set_LBFGS_options(**LBFGS_OPTIONS)
 model.compile("L-BFGS")  # 使用 L-BFGS 编译模型
 losshistory_lbfgs, train_state_lbfgs = model.train()  # 继续训练
-torch.save(model.net.state_dict(), os.path.join(_MODEL_DIR, "eshape_final.pt"))  # 保存最终模型
+torch.save(model.net.state_dict(), os.path.join(_MODEL_DIR, final_model_name))  # 保存最终模型
+print(f"✓ L-BFGS 阶段模型已保存: {final_model_name}")
 print("✓ 所有训练任务已完成！")
 
 # =============================================
@@ -196,9 +201,10 @@ print("✓ 所有训练任务已完成！")
 # 将优化器、网络结构、采样数、最终损失等写入 models/eshape_train_manifest.json
 # 便于复现与对比实验
 # =============================================
+manifest_name = f"eshape_train_manifest_{timestamp}.json"
 _manifest_path = save_manifest(
     _MODEL_DIR,
-    "eshape_train_manifest.json",
+    manifest_name,
     {
         "run": {
             "script": "train.py",
@@ -249,10 +255,10 @@ _manifest_path = save_manifest(
         },
         "artifacts": {
             "checkpoints": {
-                "after_adam": "eshape_adam.pt",
-                "final": "eshape_final.pt",
+                "after_adam": adam_model_name,
+                "final": final_model_name,
             },
-            "manifest": "eshape_train_manifest.json",
+            "manifest": f"eshape_train_manifest_{timestamp}.json",
         },
     },
 )
