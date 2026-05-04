@@ -4,15 +4,22 @@
 """
 
 # =============================================
+# 强制禁用 GPU（必须在 import torch 之前！）
+# =============================================
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+# =============================================
 # 导入必要的库
 # =============================================
-import os                      # 文件路径操作
 import numpy as np             # 数值计算
 import torch                   # PyTorch 深度学习框架
 import torch.nn as nn          # 神经网络模块
 import matplotlib.pyplot as plt # 绘图可视化
 import deepxde as dde          # 物理信息神经网络库
 from datetime import datetime  # 日期时间处理（用于生成时间戳）
+
+torch.set_num_threads(24)  # 设置 CPU 线程数
 
 # 从 training_metadata 模块导入训练元数据相关函数：
 # - collect_environment: 收集运行环境信息
@@ -29,7 +36,9 @@ from training_metadata import (
 # 项目根目录下的 models/ 存放 .pt 与训练清单，路径与当前工作目录无关
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 获取项目根目录路径
 _MODEL_DIR = os.path.join(_ROOT, "models")  # 模型保存目录
+_RESULTS_DIR = os.path.join(_ROOT, "results")  # 图像保存目录
 os.makedirs(_MODEL_DIR, exist_ok=True)  # 确保模型目录存在，不存在则创建
+os.makedirs(_RESULTS_DIR, exist_ok=True)  # 确保结果目录存在
 # 设置 DeepXDE 后端为 PyTorch
 os.environ["DDE_BACKEND"] = "pytorch"
 
@@ -142,40 +151,22 @@ net = dde.nn.FNN([2] + [128] * 6 + [1], "swish", "Glorot normal")  # 7层隐藏�
 model = dde.Model(data, net)  # 创建 DeepXDE 模型
 
 # =============================================
-# GPU 配置与训练设备选择
-# DeepXDE 在 GPU 上采点与反传；L-BFGS 阶段会切回 CPU
+# 强制使用 CPU 训练
 # =============================================
-if torch.cuda.is_available():
-    torch.cuda.init()
-    model.net.to(torch.device("cuda"))  # 将模型移到 GPU
-    torch.set_float32_matmul_precision('high')  # 设置矩阵乘法精度
-    print(f"✓ 使用 GPU: {torch.cuda.get_device_name(0)}")
-
-    # =============================================
-    # Dummy Forward 初始化 CUDA 上下文
-    # 避免 "Attempting to run cuBLAS, but there was no current CUDA context" 警告
-    # =============================================
-    print("正在初始化 CUDA 上下文...")
-    dummy_x = torch.randn(100, 2, device=torch.device("cuda"))  # 创建随机输入
-    with torch.no_grad():
-        _ = model.net(dummy_x)  # 执行一次前向传播以初始化 CUDA
-    torch.cuda.synchronize()  # 确保 CUDA 操作完成
-    print("✓ CUDA 上下文初始化完成")
-else:
-    print("警告：GPU 不可用，使用 CPU")
+print("✓ 使用 CPU 训练")
 
 
 # =============================================
 # 训练超参数设置
 # =============================================
 ADAM_LR = 0.001          # Adam 优化器学习率
-ADAM_ITERATIONS = 2000  # Adam 迭代次数
+ADAM_ITERATIONS = 1000  # Adam 迭代次数
 
 # L-BFGS 参数说明：
 # maxcor: L-BFGS 保留的曲率对数量
 # gtol/ftol: 梯度与函数值停止准则（0 表示不按该项停）
 # maxiter: L-BFGS 内层迭代上限
-LBFGS_OPTIONS = {"maxcor": 100, "ftol": 0, "gtol": 1e-13, "maxiter": 5000}
+LBFGS_OPTIONS = {"maxcor": 100, "ftol": 0, "gtol": 1e-13, "maxiter": 1000}
 train_device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # =============================================
@@ -198,9 +189,6 @@ print(f"✓ Adam 阶段模型已保存: {adam_model_name}")
 # 阶段2：L-BFGS 精细优化
 # 在 Adam 解的基础上快速下降残差，常能压到更小 PDE 损失
 # =============================================
-print("切回 CPU 准备 L-BFGS...")
-model.net.to(torch.device("cpu"))  # L-BFGS 在 CPU 上运行
-
 # 配置 L-BFGS 优化器参数
 dde.optimizers.config.set_LBFGS_options(**LBFGS_OPTIONS)
 model.compile("L-BFGS")  # 使用 L-BFGS 编译模型
@@ -277,16 +265,19 @@ _manifest_path = save_manifest(
 )
 print(f"✓ 训练参数已保存: {_manifest_path}")
 
+# 确保模型完全在 CPU 上
+torch.cuda.empty_cache()  # 清空 GPU 缓存
+model.net.to(torch.device("cpu"))  # 强制模型到 CPU
+
 
 # =============================================
 # 预测与可视化函数
 # 由磁矢势 A 计算磁场强度 H：二维下 H_x = (1/μ₀)∂A/∂y，H_y = -(1/μ₀)∂A/∂x
-# 然后绘制 A 与 |H| 的分布图
+# 然后绘制 A 与 |H| 的分布图并保存到 results 文件夹
 # =============================================
 def predict_and_plot():
-    """生成磁场分布图，包括磁矢势 A 和磁场强度 |H|"""
+    """生成磁场分布图，包括磁矢势 A 和磁场强度 |H|，并保存到 results 文件夹"""
     print("生成磁场分布图...")
-    model.net.to(torch.device("cpu"))  # 确保模型在 CPU 上
 
     # 创建 100x100 的网格点用于预测
     x = np.linspace(0, 1, 100)  # x 方向采样点
@@ -318,6 +309,12 @@ def predict_and_plot():
     plt.title("Magnetic Field |H|")  # 标题
 
     plt.tight_layout()  # 调整布局
+
+    # 保存图像到 results 文件夹
+    img_save_path = os.path.join(_RESULTS_DIR, f"magnetic_field_{timestamp}.png")
+    plt.savefig(img_save_path, dpi=300, bbox_inches="tight")  # 高分辨率保存
+    print(f"✓ 图像已保存到: {img_save_path}")
+
     plt.show()  # 显示图像
 
 
