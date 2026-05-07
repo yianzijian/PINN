@@ -1,0 +1,32 @@
+// D-N Iteration Flowchart
+digraph DN_Iteration {
+	rankdir=TB size="8,10"
+	node [fillcolor=white fontname=SimSun shape=rectangle style=filled]
+	Start [label="开始: 初始化界面参数 Γ
+及初始值 Γ⁰" fillcolor="#F9F9F9" shape=ellipse]
+	Init [label="设定外部迭代步数 k = 0"]
+	subgraph cluster_iteration {
+		color=blue label="第 k+1 次全局迭代" style=dashed
+		Step1 [label="步骤 1: 子域 Ω₁ Dirichlet 求解
+(以 Γᵏ 为 Dirichlet 边界条件)"]
+		AD [label="自动微分 (AD) 提取
+界面法向梯度 ∇u₁·n" fillcolor="#E1F5FE" shape=parallelogram]
+		Step2 [label="步骤 2: 子域 Ω₂ Neumann 求解
+(将梯度作为通量条件)"]
+		Step3 [label="步骤 3: 界面结果融合与松弛更新
+Γᵏ⁺¹ = θ·u₂|_Γ + (1-θ)·Γᵏ" fillcolor="#FFF9C4"]
+	}
+	Judge [label="收敛判断:
+||Γᵏ⁺¹ - Γᵏ|| < τ?" fillcolor="#FFF9C4" shape=diamond]
+	Update [label="更新步数: k = k + 1"]
+	End [label="结束: 输出耦合物理场" fillcolor="#F9F9F9" shape=ellipse]
+	Start -> Init
+	Init -> Step1
+	Step1 -> AD
+	AD -> Step2
+	Step2 -> Step3
+	Step3 -> Judge
+	Judge -> Update [label="否"]
+	Update -> Step1
+	Judge -> End [label="是"]
+}

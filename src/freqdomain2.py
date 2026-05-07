@@ -20,6 +20,7 @@ _RESULTS_DIR = os.path.join(_ROOT, "results")
 os.makedirs(_MODEL_DIR, exist_ok=True)
 os.makedirs(_RESULTS_DIR, exist_ok=True)
 
+
 # =============================================
 # 物理常数与材料属性 (单位: cm)
 # =============================================
@@ -28,7 +29,7 @@ L_cm = 1.0                         # 特征长度 1 cm
 J0_cm = 1000.0                     # 源电流密度 1000 A/cm²
 A0_cm = mu0_cm * J0_cm * (L_cm**2) # 特征磁矢势 T·cm (Wb/cm)
 
-freq = 50
+freq = 1000
 omega = 2 * np.pi * freq
 
 # 材料电导率 (S/m 转换为 S/cm: 除以 100)
@@ -88,15 +89,15 @@ def pde(x, y):
     dAi_yy = dde.grad.hessian(y, x, component=1, i=1, j=1)
 
     # 归一化源电流
-    f_val = f_model(x)
+    f_val = f_model(x) / J0_cm
 
     # 核心修改：获取随空间变化的局域耦合系数 C(x, y)
     sigma_x = get_sigma_distribution(x)
-    C_local = omega * mu0_cm * sigma_x
+    C_local = omega * mu0_cm * sigma_x * (L_cm ** 2)
 
     # 耦合方程组 (不同材质内涡流效应强度不同)
-    res_real = ((dAr_xx + dAr_yy) + C_local * Ai)/mu0_cm + f_val
-    res_imag = ((dAi_xx + dAi_yy) - C_local * Ar)/mu0_cm
+    res_real = (dAr_xx + dAr_yy) + C_local * Ai + f_val
+    res_imag = (dAi_xx + dAi_yy) - C_local * Ar
 
     return [res_real, res_imag]
 
@@ -159,7 +160,7 @@ bcs = [
     # ---------------------------------------------------------
     # 第二行公式：导数约束 Hx = 0 和 Hy = 0
     # ---------------------------------------------------------
-    # Hx|_{O-C} = Hx|_{A-B} = 0  => 左右边界 dA/dy = 01/mu0_cm*
+    # Hx|_{O-C} = Hx|_{A-B} = 0  => 左右边界 dA/dy = 0
     dde.icbc.OperatorBC(geom, dAdy_real, boundary_left),  # O-C
     dde.icbc.OperatorBC(geom, dAdy_imag, boundary_left),
     dde.icbc.OperatorBC(geom, dAdy_real, boundary_right),  # A-B
@@ -172,25 +173,38 @@ bcs = [
     dde.icbc.OperatorBC(geom, dAdx_imag, boundary_top),
 
 ]
+
+
+
 # =============================================
 # 模型构建
 # =============================================
 # 多材料边界会产生强烈的物理场跳变，需要足够的采样点来捕获
-data = dde.data.PDE(geom, pde, bcs, num_domain=2000, num_boundary=200, num_test=500)
-net = dde.nn.FNN([2] + [64] * 6 + [2], "tanh", "Glorot normal")
+
+data = dde.data.PDE(geom, pde, bcs, num_domain=2000, num_boundary=500, num_test=300)
+net = dde.nn.FNN([2] + [64] * 6 + [2], "swish", "Glorot normal")
 model = dde.Model(data, net)
 
 # =============================================
 # 训练阶段
 # =============================================
 print("✓ 多材料电导率分布初始化完成 (空气/硅钢/铜)")
-model.compile("adam", lr=0.001,loss_weights=[1e-9,1e-9,1, 1000, 1, 1000,1, 1000, 1, 1000,1, 1000, 1, 1000,1, 1000, 1, 1000])
-model.train(iterations=1000)
+model.compile("adam", lr=0.001)
+model.train(iterations=5000)
+# 生成时间戳（格式：YYYYMMDD_HHMMSS）
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+adam_model_name = f"eshape_adam_{timestamp}.pt"
+final_model_name = f"eshape_final_{timestamp}.pt"
 
-dde.optimizers.config.set_LBFGS_options(maxiter=1000)
+torch.save(model.net.state_dict(), os.path.join(_MODEL_DIR, adam_model_name))  # 保存 Adam 训练结果
+print(f"✓ Adam 阶段模型已保存: {adam_model_name}")
+
+dde.optimizers.config.set_LBFGS_options(maxiter=2000)
 model.compile("L-BFGS")
 model.train()
-
+torch.save(model.net.state_dict(), os.path.join(_MODEL_DIR, final_model_name))  # 保存最终模型
+print(f"✓ L-BFGS 阶段模型已保存: {final_model_name}")
+print("✓ 所有训练任务已完成！")
 # =============================================
 # 预测与可视化
 # =============================================
