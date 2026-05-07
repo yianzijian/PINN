@@ -7,8 +7,6 @@
 # 强制禁用 GPU（必须在 import torch 之前！）
 # =============================================
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
 # =============================================
 # 导入必要的库
 # =============================================
@@ -19,7 +17,7 @@ import matplotlib.pyplot as plt # 绘图可视化
 import deepxde as dde          # 物理信息神经网络库
 from datetime import datetime  # 日期时间处理（用于生成时间戳）
 
-torch.set_num_threads(24)  # 设置 CPU 线程数
+torch.set_num_threads(8)  # 设置 CPU 线程数
 
 # 从 training_metadata 模块导入训练元数据相关函数：
 # - collect_environment: 收集运行环境信息
@@ -51,8 +49,7 @@ J0 = 1000.0             # 参考电流密度，源项 f_model 的输出会除以
 A0 = mu0 * J0 * L ** 2  # 特征磁矢势，用于把网络输出还原到物理量
 
 # float32：Adam + GPU 上通常更快；若损失震荡可改为 float64（会更慢）
-dde.config.set_default_float("float32")
-
+dde.config.set_default_float("float64")
 # =============================================
 # 计算域定义：单位正方形，坐标为无量纲 x,y ∈ [0,1]
 # =============================================
@@ -147,26 +144,22 @@ data = dde.data.PDE(geom, pde, bcs, num_domain=1000, num_boundary=500, num_test=
 # 输入: (x, y) 二维坐标，输出: 1 维磁矢势 A
 # swish 激活函数在 PINN 中常用
 # =============================================
-net = dde.nn.FNN([2] + [128] * 6 + [1], "swish", "Glorot normal")  # 7层隐藏层，每层128神经元
+net = dde.nn.FNN([2] + [32] * 6 + [1], "swish", "Glorot normal")  # 7层隐藏层，每层128神经元
 model = dde.Model(data, net)  # 创建 DeepXDE 模型
 
-# =============================================
-# 强制使用 CPU 训练
-# =============================================
-print("✓ 使用 CPU 训练")
 
 
 # =============================================
 # 训练超参数设置
 # =============================================
 ADAM_LR = 0.001          # Adam 优化器学习率
-ADAM_ITERATIONS = 1000  # Adam 迭代次数
+ADAM_ITERATIONS = 20000  # Adam 迭代次数
 
 # L-BFGS 参数说明：
 # maxcor: L-BFGS 保留的曲率对数量
 # gtol/ftol: 梯度与函数值停止准则（0 表示不按该项停）
 # maxiter: L-BFGS 内层迭代上限
-LBFGS_OPTIONS = {"maxcor": 100, "ftol": 0, "gtol": 1e-13, "maxiter": 1000}
+LBFGS_OPTIONS = {"maxcor": 100, "ftol": 0, "gtol": 1e-13, "maxiter": 20000}
 train_device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # =============================================
@@ -264,10 +257,6 @@ _manifest_path = save_manifest(
     },
 )
 print(f"✓ 训练参数已保存: {_manifest_path}")
-
-# 确保模型完全在 CPU 上
-torch.cuda.empty_cache()  # 清空 GPU 缓存
-model.net.to(torch.device("cpu"))  # 强制模型到 CPU
 
 
 # =============================================
