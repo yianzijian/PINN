@@ -181,8 +181,8 @@ bcs = [
 # =============================================
 # 多材料边界会产生强烈的物理场跳变，需要足够的采样点来捕获
 
-data = dde.data.PDE(geom, pde, bcs, num_domain=12000, num_boundary=300, num_test=300)
-net = dde.nn.FNN([2] + [64] * 6 + [2], "swish", "Glorot normal")
+data = dde.data.PDE(geom, pde, bcs, num_domain=1000, num_boundary=300, num_test=300)
+net = dde.nn.FNN([2] + [64] * 6 + [2], "tanh", "Glorot normal")
 model = dde.Model(data, net)
 
 # =============================================
@@ -190,7 +190,7 @@ model = dde.Model(data, net)
 # =============================================
 print("✓ 多材料电导率分布初始化完成 (空气/硅钢/铜)")
 model.compile("adam", lr=0.002)
-model.train(iterations=30000)
+model.train(iterations=1000)
 # 生成时间戳（格式：YYYYMMDD_HHMMSS）
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 adam_model_name = f"eshape_adam_{timestamp}.pt"
@@ -199,7 +199,45 @@ final_model_name = f"eshape_final_{timestamp}.pt"
 torch.save(model.net.state_dict(), os.path.join(_MODEL_DIR, adam_model_name))  # 保存 Adam 训练结果
 print(f"✓ Adam 阶段模型已保存: {adam_model_name}")
 
-dde.optimizers.config.set_LBFGS_options(maxiter=2000)
+
+# =============================================
+# Residual-based Adaptive Refinement (RAR)
+# =============================================
+# Residual-based Adaptive Refinement (RAR) 修正版
+# =============================================
+def residual_based_adaptive_refinement(model, geom, rounds=3, n_new_points=500, n_candidates=5000):
+    print(f"\n--- 启动 Residual-based Adaptive Refinement (共 {rounds} 轮) ---")
+
+    for i in range(rounds):
+        # 1. 随机生成候选海选点
+        X_candidates = geom.random_points(n_candidates)
+
+        # 2. 预测 PDE 残差 (关键：使用 predict 并指定 operator)
+        f_res = model.predict(X_candidates, operator=pde)
+
+        # 3. 计算综合残差分值
+        f_res_np = np.array(f_res)
+        err_score = np.sum(np.abs(f_res_np), axis=0).flatten()
+
+        # 4. 筛选残差最大的点
+        err_indices = np.argsort(err_score)[-n_new_points:]
+        new_points = X_candidates[err_indices]
+
+        # 5. 添加新点到训练集
+        model.data.add_anchors(new_points)
+
+        print(f"RAR 轮次 {i + 1}/{rounds}: 识别并加密了 {len(new_points)} 个复杂场区域点.")
+
+        # 6. 微调训练
+        model.compile("adam", lr=0.0005)
+        model.train(iterations=1000)
+# 建议在基础训练完成后执行，此时模型已初步掌握场分布
+residual_based_adaptive_refinement(model, geom, rounds=10, n_new_points=500)
+
+# 3. 最终 L-BFGS 压平残差
+model.compile("L-BFGS")
+model.train()
+dde.optimizers.config.set_LBFGS_options(maxiter=1000)
 model.compile("L-BFGS")
 model.train()
 torch.save(model.net.state_dict(), os.path.join(_MODEL_DIR, final_model_name))  # 保存最终模型
